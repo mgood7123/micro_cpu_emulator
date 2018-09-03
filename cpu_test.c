@@ -29,8 +29,8 @@ inline char *__va_aligned__2(char *p, int align)
 #define CPU_TYPE_ADD 1
 #define CPU_POWER_ON true
 #define CPU_POWER_OFF false
-#define null_int(x) if ( ! x ) x = 0
-#define null_custom(x, y) if ( ! x ) x = y
+#define null_int(x) x = 0
+#define null_custom(x, y) x = y
 
 struct virtual_cpu_register_bank {
     int r1;
@@ -245,6 +245,7 @@ int cpu_queue_add(CPU_TYPE what, ...) {
 void virtual_cpu_register_check(struct virtual_cpu_register_bank *reg, char * name) {
     null_int(reg->r1);
     null_int(reg->r2);
+    null_int(reg->r3);
     null_int(reg->pc);
     null_custom(reg->name, name);
     null_int(reg->type);

@@ -7,7 +7,7 @@
 
 typedef char *va_list;
 
-inline char *__va_aligned__(char *p, int align)
+inline char *__va_aligned__2(char *p, int align)
 {
 	int alignLocal = 8;
 	long long ll=(long long)p;
@@ -18,7 +18,7 @@ inline char *__va_aligned__(char *p, int align)
 
 #define va_start(ap, param) (ap) = ((char *)&param) + sizeof(param)
 #define va_end(ap) (ap)
-#define va_arg(ap, type) ((ap) = __va_aligned__((ap), sizeof(type)*2), (ap) += sizeof(type)*2, *(type *)((ap) - (sizeof(type)*2)))
+#define va_arg(ap, type) ((ap) = __va_aligned__2((ap), sizeof(type)*2), (ap) += sizeof(type)*2, *(type *)((ap) - (sizeof(type)*2)))
 #define va_copy(dest, src)  (dest) = (src);
 
 #else
@@ -80,7 +80,7 @@ void cpu_shutdown(struct virtual_cpu *cpu);
 struct QNode* newNode(CPU_TYPE type, struct virtual_cpu_register_bank reg);
 struct Queue *createQueue();
 void store_bank(struct Queue *q, CPU_TYPE type, struct virtual_cpu_register_bank reg);
-struct virtual_cpu_register_bank load_bank(struct Queue *q);
+struct QNode * load_bank(struct Queue *q);
 int cpu_queue_add(CPU_TYPE what, ...);
 void virtual_cpu_register_check(struct virtual_cpu_register_bank *reg, char * name);
 void virtual_cpu_sub_core_check(struct virtual_cpu_sub_core * core, char * name);
@@ -88,6 +88,8 @@ void virtual_cpu_core_check(struct virtual_cpu_core *core, char * name);
 void cpu_add(int register_input1, int register_input2, int * register_out);
 void cpu_action_init(void);
 void cpu_execute(struct virtual_cpu *cpu);
+void cpu_deinit(struct virtual_cpu *cpu);
+void cpu_core_init(struct virtual_cpu *cpu, int max_cores);
 
 
 void cpu_register_info_minimal(struct virtual_cpu_register_bank *virtual_register) {
@@ -152,6 +154,7 @@ void cpu_shutdown(struct virtual_cpu *cpu) {
     virtual_cpu_check(cpu);
     printf("VIRTUAL CPU: shutting down virtual cpu:      %s\n", cpu->name);
     cpu_core_shutdown(&cpu->core[0]);
+    cpu_deinit(cpu);
 }
 
 // A C program to demonstrate linked list based implementation of queue 
@@ -204,11 +207,11 @@ void store_bank(struct Queue *q, CPU_TYPE type, struct virtual_cpu_register_bank
     q->rear = temp;
 }
  
-struct virtual_cpu_register_bank load_bank(struct Queue *q)
+struct QNode * load_bank(struct Queue *q)
 {
     // If queue is empty, return NULL.
     if (q->front == NULL)
-       return (struct virtual_cpu_register_bank) {0};
+       return NULL;
  
     // Store previous front and move front one node ahead
     struct QNode *temp = q->front;
@@ -217,7 +220,7 @@ struct virtual_cpu_register_bank load_bank(struct Queue *q)
     // If front becomes NULL, then change rear also as NULL
     if (q->front == NULL)
        q->rear = NULL;
-    return temp->reg;
+    return temp;
 }
 
 int cpu_queue_add(CPU_TYPE what, ...) {
@@ -278,6 +281,16 @@ void cpu_core_init(struct virtual_cpu *cpu, int max_cores) {
     cpu->core_count = max_cores;
 }
 
+void cpu_deinit(struct virtual_cpu *cpu) {
+    if (!cpu->core) return;
+    for (int i = 0; i < cpu->core_count; i++) {
+        free(cpu->core[i].name);
+    }
+    free(cpu->core);
+    free(cpu->q);
+    cpu->core_count = 0;
+}
+
 void virtual_cpu_check(struct virtual_cpu *cpu) {
     cpu_action_init();
     cpu_core_init(cpu, 32);
@@ -303,15 +316,18 @@ void cpu_action_init(void) {
 void cpu_execute(struct virtual_cpu *cpu) {
     puts("attempting to execute instruction list");
     // obtain the first added instruction
+    struct QNode * node = malloc(1); // this gets freed anyway
     struct virtual_cpu_register_bank regs = {0};
     struct virtual_cpu_register_bank regstmp = {0};
     virtual_cpu_register_check(&regstmp, "placeholder");
     virtual_cpu_register_check(&regs, "global");
     int instructions;
-    while (regstmp.name != NULL) {
+    while (node != NULL) {
         // drain the list until empty
-        regstmp = load_bank(cpu->q);
-        if (regstmp.name == NULL) break;
+        free(node);
+        node = load_bank(cpu->q);
+        if (node == NULL) break;
+        regstmp = node->reg;
         instructions++;
         if (regstmp.type == CPU_TYPE_ADD) {
             cpu_register_info_minimal(&regstmp);
@@ -322,9 +338,6 @@ void cpu_execute(struct virtual_cpu *cpu) {
     }
     if (instructions == 0) puts("i have no instruction to execute");
     else puts("i have no instructions left to execute");
-//     struct QNode *n = deQueue(q);
-//     if (n != NULL)
-//       printf("Dequeued item is %d", n->key);
 }
 
 int main()

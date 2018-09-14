@@ -1,10 +1,29 @@
-#include "varg.h"
-#include "cpu_language.c"
 #include <string.h>
 #include <stdio.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#ifdef __CPP__
+
+typedef char *va_list;
+
+inline char *__va_aligned__2(char *p, int align)
+{
+	int alignLocal = 8;
+	long long ll=(long long)p;
+	while(ll%alignLocal!=0)
+		ll++;
+	return (char *)ll;
+}
+
+#define va_start(ap, param) (ap) = ((char *)&param) + sizeof(param)
+#define va_end(ap) (ap)
+#define va_arg(ap, type) ((ap) = __va_aligned__2((ap), sizeof(type)*2), (ap) += sizeof(type)*2, *(type *)((ap) - (sizeof(type)*2)))
+#define va_copy(dest, src)  (dest) = (src);
+
+#else
+#include <stdarg.h>
+#endif
 #include <stdio.h>
 #define CPU_TYPE unsigned int
 #define CPU_TYPE_ADD 1
@@ -39,15 +58,11 @@ struct virtual_cpu_core {
     bool init;
 };
 
+// variable core cpu
 struct virtual_cpu {
     int core_count;
     struct virtual_cpu_core *core;
     struct Queue *q;
-    char ** table_instructions;
-    char ** table_types;
-    char ** table_registers;
-    char ** table_encoding;
-    struct instruction * instruction_bank;
     char * name;
 } cpu_default;
 
@@ -62,11 +77,11 @@ void cpu_core_start(struct virtual_cpu_core *core);
 void cpu_start(struct virtual_cpu *cpu);
 void cpu_core_shutdown(struct virtual_cpu_core *core);
 void cpu_shutdown(struct virtual_cpu *cpu);
-struct QNode* newNode(char * string);
+struct QNode* newNode(CPU_TYPE type, struct virtual_cpu_register_bank reg);
 struct Queue *createQueue();
-void store_asm(struct Queue *q, char * string);
-struct QNode * load_asm(struct Queue *q);
-int cpu_queue_add(char * string);
+void store_bank(struct Queue *q, CPU_TYPE type, struct virtual_cpu_register_bank reg);
+struct QNode * load_bank(struct Queue *q);
+int cpu_queue_add(CPU_TYPE what, ...);
 void virtual_cpu_register_check(struct virtual_cpu_register_bank *reg, char * name);
 void virtual_cpu_sub_core_check(struct virtual_cpu_sub_core * core, char * name);
 void virtual_cpu_core_check(struct virtual_cpu_core *core, char * name);
@@ -125,15 +140,8 @@ void cpu_core_start(struct virtual_cpu_core *core) {
 }
 
 void cpu_start(struct virtual_cpu *cpu) {
-    puts("VIRTUAL CPU: performing startup check");
     virtual_cpu_check(cpu);
-    puts("VIRTUAL CPU: startup check complete");
     printf("VIRTUAL CPU: starting virtual cpu:      %s\n", cpu->name);
-    Expression_Assign("register_r1", &cpu->core[0].current.virtual_register.r1);
-    Expression_Assign("register_r2", &cpu->core[0].current.virtual_register.r2);
-    Expression_Assign("register_r3", &cpu->core[0].current.virtual_register.r3);
-    init_table(&cpu->table_instructions, &cpu->table_types, &cpu->table_registers, &cpu->table_encoding);
-    setup_decoding_information(&cpu->instruction_bank);
     cpu_core_start(&cpu->core[0]);
 }
 
@@ -143,15 +151,8 @@ void cpu_core_shutdown(struct virtual_cpu_core *core) {
 }
 
 void cpu_shutdown(struct virtual_cpu *cpu) {
-    puts("VIRTUAL CPU: performing shutdown check");
     virtual_cpu_check(cpu);
-    puts("VIRTUAL CPU: shutdown check complete");
     printf("VIRTUAL CPU: shutting down virtual cpu:      %s\n", cpu->name);
-    denit_table(&cpu->table_instructions, &cpu->table_types, &cpu->table_registers, &cpu->table_encoding);
-    instruction_delete_bank(&cpu->instruction_bank);
-    opcode_structure_clear_all();
-    internal_parser_index = 0;
-//     Expression_Assign_free();
     cpu_core_shutdown(&cpu->core[0]);
     cpu_deinit(cpu);
 }
@@ -160,7 +161,7 @@ void cpu_shutdown(struct virtual_cpu *cpu) {
 // A linked list (LL) node to store a queue entry
 struct QNode
 {
-    char * assembly;
+    struct virtual_cpu_register_bank reg;
     struct QNode *next;
 };
  
@@ -172,10 +173,11 @@ struct Queue
 };
  
 // A utility function to create a new linked list node.
-struct QNode* newNode(char * string)
+struct QNode* newNode(CPU_TYPE type, struct virtual_cpu_register_bank reg)
 {
     struct QNode *temp = (struct QNode*)malloc(sizeof(struct QNode));
-    temp->assembly = string;
+    temp->reg = reg;
+    temp->reg.type = type;
     temp->next = NULL;
     return temp; 
 }
@@ -187,11 +189,11 @@ struct Queue *createQueue()
     q->front = q->rear = NULL;
     return q;
 }
-
-void store_asm(struct Queue *q, char * string)
+ 
+void store_bank(struct Queue *q, CPU_TYPE type, struct virtual_cpu_register_bank reg)
 {
     // Create a new LL node
-    struct QNode *temp = newNode(string);
+    struct QNode *temp = newNode(type, reg);
  
     // If queue is empty, then new node is front and rear both
     if (q->rear == NULL)
@@ -205,7 +207,7 @@ void store_asm(struct Queue *q, char * string)
     q->rear = temp;
 }
  
-struct QNode * load_asm(struct Queue *q)
+struct QNode * load_bank(struct Queue *q)
 {
     // If queue is empty, return NULL.
     if (q->front == NULL)
@@ -219,6 +221,25 @@ struct QNode * load_asm(struct Queue *q)
     if (q->front == NULL)
        q->rear = NULL;
     return temp;
+}
+
+int cpu_queue_add(CPU_TYPE what, ...) {
+    if (!cpu_default.q) cpu_default.q = createQueue();
+    struct virtual_cpu_register_bank regs;
+    virtual_cpu_register_check(&regs, "register bank queue");
+    // storage format shall be a register queue, arguments are to be interperated by specified type and saved appropriately
+    if (what == CPU_TYPE_ADD) {
+        puts("queing ADD instruction");
+        // adds r1 and r2 and stores the result in r3
+        va_list ap2;
+        va_start(ap2, what);
+        regs.r1 = va_arg(ap2, int);
+        regs.r2 = va_arg(ap2, int);
+        store_bank(cpu_default.q, what, regs);
+        va_end(ap2);
+    }
+    //cpu_register_info_minimal(&regs);
+    return 0;
 }
 
 void virtual_cpu_register_check(struct virtual_cpu_register_bank *reg, char * name) {
@@ -292,12 +313,6 @@ void cpu_action_init(void) {
     null_custom(cpu_action.add, cpu_add);
 }
 
-int cpu_queue_add(char * string) {
-    if (!cpu_default.q) cpu_default.q = createQueue();
-    store_asm(cpu_default.q, string);
-    return 0;
-}
-
 // cpu shall backup current to previous in order to have a restore point, then take changes from que and commit them to current
 void cpu_execute(struct virtual_cpu *cpu) {
     puts("attempting to execute instruction list");
@@ -307,37 +322,34 @@ void cpu_execute(struct virtual_cpu *cpu) {
     struct virtual_cpu_register_bank regstmp = {0};
     virtual_cpu_register_check(&regstmp, "placeholder");
     virtual_cpu_register_check(&regs, "global");
-    int instructions = 0;
+    int instructions;
     while (node != NULL) {
         // drain the list until empty
         free(node);
-        node = load_asm(cpu->q);
+        node = load_bank(cpu->q);
         if (node == NULL) break;
-        parse(cpu->table_encoding, node->assembly);
-        cpu_decode(cpu->table_instructions, cpu->table_types, cpu->table_registers, cpu->instruction_bank, cpu->core[0].current.virtual_register.pc);
-        cpu->core[0].current.virtual_register.pc++;
+        regstmp = node->reg;
         instructions++;
+        if (regstmp.type == CPU_TYPE_ADD) {
+            cpu_register_info_minimal(&regstmp);
+            cpu_add(regstmp.r1, regstmp.r2, &regstmp.r3);
+            cpu_add(regstmp.r3, regs.r3, &regs.r3);
+            cpu_register_info_minimal(&regs);
+        }
     }
     if (instructions == 0) puts("i have no instruction to execute");
     else puts("i have no instructions left to execute");
-//     opcode_structure_clear_all();
-//     internal_parser_index = 0;
 }
 
 int main()
 {
     cpu_start(&cpu_default);
     cpu_info(&cpu_default);
-    cpu_queue_add("instruction_mov 19, register_r1");
-    cpu_queue_add("instruction_mov 1, register_r2");
-    cpu_queue_add("instruction_add register_r1, register_r2");
-    cpu_queue_add("instruction_add3 register_r3, register_r3, register_r3");
-
-    cpu_execute(&cpu_default);
-    cpu_queue_add("instruction_mov 1, register_r2");
+    cpu_queue_add(CPU_TYPE_ADD, 1, 2);
+    cpu_queue_add(CPU_TYPE_ADD, 10, 20);
     cpu_execute(&cpu_default);
     cpu_execute(&cpu_default);
-    cpu_info(&cpu_default);
+    cpu_execute(&cpu_default);
     cpu_shutdown(&cpu_default);
     return 0;
 }

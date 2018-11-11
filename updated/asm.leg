@@ -1,0 +1,215 @@
+%{
+#define YY_CTX_LOCAL 1
+#include <stdio.h>
+struct asm_or_math {
+	int value;
+	char * name;
+};
+#define YYSTYPE struct asm_or_math
+int vars[26];
+int parser_opcode_count = 0;
+int parser_opcode_error = 0;
+char *** parser_table_encoding;
+#define parser_opcode_type_number 1
+#define parser_opcode_type_register 2
+// yytext is undefined, this needs to be defined in order to create a function that uses yytext, a definition must be used instead
+#define parser_opcode_parse(parser_opcode_parse_number, parser_opcode_parse_type) \
+	if (!parser_opcode_error) { \
+        if (parser_opcode_count == parser_opcode_parse_number) { \
+            int isnum = 0; \
+            char * desttype = NULL; \
+            if (parser_opcode_parse_type == parser_opcode_type_number) desttype = "type_number"; \
+			else if (parser_opcode_parse_type == parser_opcode_type_register) desttype = "type_register"; \
+            char * type = env__get(*parser_table_encoding, desttype); \
+            if (type) { \
+				opcode_structure[internal_parser_index].opcode[parser_opcode_parse_number-1].type = *type; \
+				pi(opcode_structure[internal_parser_index].opcode[parser_opcode_parse_number-1].type); \
+			} else { \
+                printf("error: invalid number token: %s\n", yytext); \
+                opcode_structure[internal_parser_index].opcode[parser_opcode_parse_number-1].type = 0x0; \
+                opcode_structure_clear(internal_parser_index); \
+            } \
+            if (parser_opcode_parse_type == parser_opcode_type_number) { \
+				opcode_structure[internal_parser_index].opcode[parser_opcode_parse_number-1].opcode = atoi(yytext); \
+				opcode_structure[internal_parser_index].opcode_count++; \
+			} \
+			else if (parser_opcode_parse_type == parser_opcode_type_register) { \
+				char * operand; \
+				operand = env__get(*parser_table_encoding, yytext+1); \
+				opcode_structure[internal_parser_index].opcode[parser_opcode_parse_number-1].opcode = operand?(*operand):0x0; \
+				opcode_structure[internal_parser_index].opcode_count++; \
+			} \
+        } \
+    }
+%}
+
+#assembly expression
+
+# Int&T
+
+# a combination of Intel syntax and AT&T syntax
+
+# mov 19, r1
+# mov 1, r2
+# add r1, r2
+# add3 r3, r3, r3
+
+# mov(b)  -> "mov" + "b"
+
+
+asm = instruction (ss size se)? - operands+ ( EOL | EOF)
+	| something 		{ printf("error\n"); }
+
+something = ( !EOL . )* ( EOL | .)
+register_token = '%'
+
+instruction = < word > @{
+	parser_opcode_count = 0;
+	parser_opcode_error = 0;
+}
+NUM__ = {
+	parser_opcode_count++;
+	pi(parser_opcode_count);
+	parser_opcode_parse(1, parser_opcode_type_number);
+	parser_opcode_parse(2, parser_opcode_type_number);
+	parser_opcode_parse(3, parser_opcode_type_number);
+}
+
+REG__ = {
+	parser_opcode_count++;
+	pi(parser_opcode_count);
+	parser_opcode_parse(1, parser_opcode_type_register);
+	parser_opcode_parse(2, parser_opcode_type_register);
+	parser_opcode_parse(3, parser_opcode_type_register);
+}
+
+operands = < (number > NUM__ | reg > REG__) - comma? -
+
+size = s_byte | s_word | s_dword | s_qword
+s_byte = 'b' { printf("size: byte (1)\n"); }
+s_word = 'w' { printf("size: word (2)\n"); }
+s_dword = 'd' { printf("size: dword (4)\n"); }
+s_qword = 'q' { printf("size: qword (8)\n"); }
+
+#wordmod = /^[a-zA-Z0-9]+(?<![${size}])/
+
+word = [a-z0-9_]+
+reg = register_token word
+number = [0-9]+
+EOL	= '\n' | '\r\n' | '\r' | ';'
+EOF = !. 
+ss = '(' | '[' | '{'
+se = ')' | ']' | '}'
+-	= [ \t]*
+comma = ','
+
+
+#math expression
+
+expression = exp+
+
+exp = ( - ( MATH_word | MATH_op | MATH_CLOSE | MATH_OPEN | MATH_EQUALS ) ) + MATH_SEPERATOR { printf("expression end\n\n"); }
+| something 		{ printf("error\n"); }
+
+MATH_op = < ('+' | '*' | '/' | '-') > { printf("op: [%s] ",yytext); }
+MATH_word = < [a-z0-9_]+ > { printf("word: [%s] ",yytext); }
+MATH_EQUALS = < '=' > { printf("EQUALS: [%s] ",yytext); }
+MATH_OPEN = < '(' > { printf("OPEN: [%s] ",yytext); }
+MATH_CLOSE = < ')' > { printf("CLOSE: [%s] ",yytext); }
+MATH_SEPERATOR = < EOL > { printf("SEPERATOR: [%s] ",yytext); } | EOF { printf("SEPERATOR: [EOF] "); }
+
+Stmt	= - e:Expr ( EOL | !.) 			{ printf("%d\n", e); }
+	| ( !EOL . )* ( EOL | .) 		{ printf("error\n"); }
+
+Expr	= i:ID - ASSIGN - s:Sum -		{ $$.value= vars[i.value]= s.value; }
+	| - s:Sum - 				{ $$.value= s.value; }
+
+Sum	=  - l:Product -
+		(  - PLUS  -  r:Product - 	{ l.value += r.value; }
+		|  - MINUS  - r:Product - 	{ l.value -= r.value; }
+		)*			{ $$.value= l.value; }
+
+Product	=  - l:Value - 
+		(  - TIMES   - r:Value - 	{ l.value *= r.value; }
+		|  - DIVIDE  - r:Value - 	{ l.value /= r.value; }
+		)*			{ $$.value= l.value; }
+
+Value	=  - i:NUMBER - 			{ $$.value= atoi(yytext); }
+	|  - i:ID  - !ASSIGN - 			{ $$.value= vars[i.value]; }
+	|  - OPEN  - i:Expr  - CLOSE - 		{ $$.value= i.value; }
+
+NUMBER	= < [0-9]+ >	-		{ $$.value= atoi(yytext); }
+ID	= < [a-z]  >	-		{ $$.value= yytext[0] - 'a'; }
+ASSIGN	= '='		-
+PLUS	= '+'		-
+MINUS	= '-'		-
+TIMES	= '*'		-
+DIVIDE	= '/'		-
+OPEN	= '('
+CLOSE	= ')' 
+
+
+
+
+# true or false based expression parser
+
+# need to understand how this works before i implement sub expressions, eg (1+1) + 1     (1+1) would be a sub expression, evaluated to 2+1
+
+# $$ is a semantic value, according to PEG and GNU bison, and acts like a return value
+
+# a rule can be assigned a identifier by prefixing "name:" to the rule, which can be used to access the semantic value of the associated rule
+
+# example:
+
+# test = value:num { printf("value of num is %s\n", value); }
+# num = { $$ = 5; }
+
+# here num is assigned a semantic value of 5 via $$
+# from rule 'test' the semantic value of num is accessed via value:num wich associates it to 'value'
+
+# equivilant in C:
+
+# int num() {
+# 	return 5;
+# }
+# 
+# void test() {
+# 	int value = num(); // value is assigned the return value of the function num
+# 	printf("value of num is %s\n", value);
+# }
+
+# the type of a semantic value $$ defaults to type int but can be changed by defining YYSTYPE , the following uses the YYSTYPE defined below:
+
+# struct asm_or_math {
+# 	int value;
+# 	char * name;
+# };
+# #define YYSTYPE struct asm_or_math
+
+
+%{
+	char * _STRING_ = "1+(1+1)+1";
+%}
+
+true_or_false = e:expr { printf("equals %d\n", e.value); }
+
+expr =
+	( lv:val { printf("%s\n", lv.name); } | lv:subt )
+	
+		(
+			  '+' ( rv:val { printf("add %s "		, rv.name); } | rv:subt ) { printf("( prev: %d ", lv.value); lv.value += rv.value; printf("new %d )\n", lv.value); }
+			| '-' ( rv:val { printf("minus %s "		, rv.name); } | rv:subt ) { printf("( prev: %d ", lv.value); lv.value -= rv.value; printf("new %d )\n", lv.value); }
+			| '*' ( rv:val { printf("multiply %s "	, rv.name); } | rv:subt ) { printf("( prev: %d ", lv.value); lv.value *= rv.value; printf("new %d )\n", lv.value); }
+			| '/' ( rv:val { printf("divide %s "	, rv.name); } | rv:subt ) { printf("( prev: %d ", lv.value); lv.value /= rv.value; printf("new %d )\n", lv.value); }
+		)* { $$.value = lv.value; }
+
+
+subt =
+			'(' { puts("sub expression enter"); }
+			true_or_false
+			')' { puts("sub expression leave"); }
+
+val =
+		'0' { $$.value = 0; $$.name = "true"; }
+	|
+		'1' { $$.value = 1; $$.name = "true"; }
